@@ -1,0 +1,52 @@
+function net = dcnnff(net, x, input_do_rate, hidden_do_rate)%net.layers{l}.do{i} is the dropout mask for the i-th output map at the
+    %l-th layer. This is drop-out, not drop connect.
+    %To implement drop-connect, use do{i,j}, for the i-th input map from
+    %the l-1st layer and the j-th output mat at the l-th layer
+    
+    %net.fvdo is the dropout mask for the end layer feature vector
+
+    n = numel(net.layers);
+    net.layers{1}.do{1} = rand(size(x)) < input_do_rate; % Randomly drop out each input
+    net.layers{1}.a{1} = x.*net.layers{1}.do{1};
+    inputmaps = 1;
+
+    for l = 2 : n   %  for each layer
+        if strcmp(net.layers{l}.type, 'c')
+            %  !!below can probably be handled by insane matrix operations
+            for j = 1 : net.layers{l}.outputmaps   %  for each output map
+                %  create temp output map
+                z = zeros(size(net.layers{l - 1}.a{1}) - [net.layers{l}.kernelsize - 1 net.layers{l}.kernelsize - 1 0]);
+                for i = 1 : inputmaps   %  for each input map
+                    %  convolve with corresponding kernel and add to temp output map
+                    z = z + convn(net.layers{l - 1}.a{i}, net.layers{l}.k{i}{j}, 'valid');
+                end
+                %  add bias, pass through nonlinearity
+                net.layers{l}.do{j} = rand(size(z)) < hidden_do_rate;
+                net.layers{l}.a{j} = sigm(z + net.layers{l}.b{j}).*net.layers{l}.do{j};
+            end
+            %  set number of input maps to this layers number of outputmaps
+            inputmaps = net.layers{l}.outputmaps;
+        elseif strcmp(net.layers{l}.type, 's')
+            %  downsample
+            for j = 1 : inputmaps
+                z = convn(net.layers{l - 1}.a{j}, ones(net.layers{l}.scale) / (net.layers{l}.scale ^ 2), 'valid');   %  !! replace with variable
+                net.layers{l}.a{j} = z(1 : net.layers{l}.scale : end, 1 : net.layers{l}.scale : end, :);
+                %net.layers{l}.do{j} = rand(size(net.layers{l}.a{j})) < hidden_do_rate;
+                net.layers{l}.do{j} = rand(size(net.layers{l}.a{j})) <= 1.0;
+                net.layers{l}.a{j} = net.layers{l}.a{j}.*net.layers{l}.do{j};
+            end
+        end
+    end
+
+    %  concatenate all end layer feature maps into vector
+    net.fv = [];
+    net.fvdo = [];
+    for j = 1 : numel(net.layers{n}.a)
+        sa = size(net.layers{n}.a{j});
+        net.fv = [net.fv; reshape(net.layers{n}.a{j}, sa(1) * sa(2), sa(3))];
+        net.fvdo = [net.fvdo; reshape(net.layers{n}.do{j}, sa(1) * sa(2), sa(3))];
+    end
+    %  feedforward into output perceptrons
+    net.o = sigm(net.ffW * (net.fv) + repmat(net.ffb, 1, size(net.fv, 2)));
+
+end
